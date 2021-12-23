@@ -1,0 +1,1162 @@
+---
+title: "Data extraction from xml inR"
+author: "Jai Iyyappa Vignesh Manivannan"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+---
+
+
+
+```{r}
+# Installing the RMySQL Library
+library(RMySQL)
+
+
+#  MySQL Settings
+db_user <- 'dbuser'
+db_password <- 'dbpass'
+db_name <- 'dbname'
+db_host <- 'hostname'
+db_port <- 3306
+
+# Establishing a connection to MySQL
+mydb <-  dbConnect(MySQL(), user = db_user, password = db_password,
+                  dbname = db_name, host = db_host, port = db_port)
+
+
+```
+
+
+```{r loadLibraries}
+library(XML)
+```
+
+### The XML file path is given.
+```{r loadPath}
+path <- "C:/Users/Jai Vignesh M/Documents/DBMS Practicum 2/pubmed_sample.xml"
+```
+
+### Parse and load XML into Document Object Model (DOM)
+
+```{r}
+# Reading the XML file and parse into DOM
+xmlDOM <- xmlParse(file = path)
+```
+
+### Determining the root element
+
+```{r}
+r <- xmlRoot(xmlDOM)
+# number of children of root (number of PubmedArticle)
+totalRow <- xmlSize(r)
+```
+### Initializing all the data frames
+
+#### Article data frame
+```{r}
+Article.df <- data.frame (articleId = vector (mode = "integer", 
+                                         length = totalRow),
+                         articleTitle = vector (mode = "character", 
+                                         length = totalRow),
+                         articleLanguage = vector (mode = "character", 
+                                         length = totalRow),
+                         articleDate = vector (mode = "character", 
+                                         length = totalRow),
+                         articlePubModel = vector (mode = "character", 
+                                         length = totalRow),
+                         issn = vector (mode = "character", 
+                                         length = totalRow),
+                          stringsAsFactors = F)
+```
+
+#### Journal data frame
+
+```{r}
+Journal.df <- data.frame (issn = character(),
+                          issnType = character(),
+                          title = character(),
+                          isoAbbreviation = character(),
+                          journalIssueVolume = integer(),
+                          journalIssueNum = integer(),
+                          journalPublishDate = character(),
+                          journalPublishYear = integer(),
+                          journalPublishMonth = character(),
+                          stringsAsFactors = F)
+```
+
+
+#### Author data frame
+
+```{r}
+Author.df <- data.frame (authorId = integer(),
+                         authorLastName = character(),
+                          authorForeName = character(),
+                          authorInitial = character(),
+                         authorAffiliation = character(),
+                          stringsAsFactors = F)
+```
+
+
+#### ArticleAuthorMap data frame
+
+
+```{r}
+ArticleAuthorMap.df <- data.frame (authorArticleMapId = integer(),
+                                   articleId = integer(),
+                                   authorId = integer(),
+                          stringsAsFactors = F)
+```
+
+
+#### MedlineJournalInfo data frame
+
+```{r}
+MedlineJournalInfo.df <- data.frame (infoId = integer(),
+                                     articleId = integer(),
+                                     country = character(),
+                                     medlineTA = character(),
+                                     nlmUniqueID = integer(),
+                                     issnLinking = character(),
+                            stringsAsFactors = F)
+```
+
+
+#### PubMedHistory data frame
+
+
+```{r}
+PubMedHistory.df <- data.frame (historyId = integer(),
+                                articleId = integer(),
+                                pubMedDateType = character(),
+                                pubMedDate = character(),
+                                stringsAsFactors = F)
+```
+
+
+### Parsing node data into data frame
+
+#### parse Journal nodes
+
+```{r parseJournal}
+parseJournal <- function (aJournalNode)
+{
+  # parse the address into its components
+  issn <- xmlValue(aJournalNode[[1]])
+  issnType <- xmlAttrs(aJournalNode[[1]])[1]
+  title <- xmlValue(aJournalNode[[3]])
+  isoAbbreviation <- xmlValue(aJournalNode[[4]])
+  journalPublishDate <- ""
+  journalIssueVolume <- xmlValue(aJournalNode[[2]][[1]])
+  journalIssueNum <- xmlValue(aJournalNode[[2]][[2]])
+  if(is.integer(aJournalNode[[2]][[3]][[1]]) && xmlName(aJournalNode[[2]][[3]][[1]]) == "Year") {
+    journalPublishYear <- xmlValue(aJournalNode[[2]][[3]][[1]])
+  }
+  else{
+    journalPublishYear <- substr(xmlValue(aJournalNode[[2]][[3]][[1]]),1,4)
+  }
+  
+  if(!is.null(aJournalNode[[2]][[3]][[2]]) && xmlName(aJournalNode[[2]][[3]][[2]]) == "Month") {
+    journalPublishMonth <- xmlValue(aJournalNode[[2]][[3]][[2]])
+  }
+  else{
+    journalPublishMonth <- substr(xmlValue(aJournalNode[[2]][[3]][[1]]),6,8)
+  }
+  
+  
+  newJournal.df <- data.frame(issn, issnType, title, isoAbbreviation, 
+                           journalIssueVolume, journalIssueNum,
+                           journalPublishDate, journalPublishYear,
+                           journalPublishMonth,  
+                           stringsAsFactors = F)
+  
+  return(newJournal.df)
+}
+```
+
+#### parse Author nodes
+
+```{r parseAuthor}
+parseAuthor <- function (anAuthorNode)
+{
+  # parse the address into its components
+  authorLastName <- xmlValue(anAuthorNode[[1]])
+  authorForeName <- xmlValue(anAuthorNode[[2]])
+  authorInitial <- xmlValue(anAuthorNode[[3]])
+  authorAffiliation <- xpathSApply(anAuthorNode, "./Affiliation", xmlValue)
+    if (length(authorAffiliation) == 0)
+      authorAffiliation <- ""
+ 
+  newAuthor.df <- data.frame(authorLastName, authorForeName, authorInitial,authorAffiliation,
+                           stringsAsFactors = F)
+  
+  return(newAuthor.df)
+}
+```
+
+#### parse parseMedlineJournal nodes
+
+```{r parseMedlineJournal}
+parseMedlineJournalInfo <- function (aninfoNode)
+{
+  # parse the address into its components
+  country <- xmlValue(aninfoNode[[1]])
+  medlineTA <- xmlValue(aninfoNode[[2]])
+  nlmUniqueID <- xmlValue(aninfoNode[[3]])
+  issnLinking <- xmlValue(aninfoNode[[4]])
+ 
+  newJournalInfo.df <- data.frame(country, medlineTA, nlmUniqueID, issnLinking,
+                           stringsAsFactors = F)
+  
+  return(newJournalInfo.df)
+}
+```
+
+### Functions for checking unique data
+
+#### Functions for checking unique data based on entire content
+
+```{r rowExists}
+rowExists <- function (aRow, aDF)
+{
+  
+  # check if that address is already in the data frame
+  n <- nrow(aDF)
+  c <- ncol(aDF)
+  
+  if (n == 0)
+  {
+    # data frame is empty, so can't exist
+    return(0)
+  }
+  
+  for (a in 1:n)
+  {
+    # check if all columns match for a row; ignore the aID column
+    if (all(aDF[a,] == aRow[1,]))
+    {
+      # found a match; return it's ID
+      return(a)
+    }
+  }
+  
+  # none matched
+  return(0)
+}
+```
+
+#### Functions for checking unique data based on primary key
+
+```{r rowExistsPrimary}
+rowPrimaryExists <- function (aRow, aDF)
+{
+  # check if that address is already in the data frame
+  n <- nrow(aDF)
+  c <- ncol(aDF)
+  
+  if (n == 0)
+  {
+    # data frame is empty, so can't exist
+    return(0)
+  }
+  
+  for (a in 1:n)
+  {
+    # check if all columns match for a row; ignore the aID column
+    if (aDF[a,1] == aRow[1,1])
+    { 
+      # found a match; return it's ID
+      return(a)
+    }
+  }
+  
+  # none matched
+  return(0)
+}
+```
+
+### Prepare author list and insert unique authors into data frame
+
+```{r prepareAuthorList}
+xpathExAuthor <- "//PubmedArticleSet/PubmedArticle/MedlineCitation/Article/AuthorList"
+authorRowList <- xpathApply(xmlDOM,xpathExAuthor)
+
+numAuthorList <- xmlSize(authorRowList)
+
+index <- 1;
+
+for (i in 1:numAuthorList)
+{
+  AuthorList <- authorRowList[[i]]
+  
+  xpathExAuthorInd <- "./Author"
+  
+  authorRows <- xpathApply(AuthorList,xpathExAuthorInd)
+
+  numAuthors <- xmlSize(authorRows)
+ 
+
+  for (j in 1:numAuthors)
+{
+  authorIndiv <- parseAuthor(authorRows[[j]])
+   
+   pk.authorUnique <- rowExists(authorIndiv, Author.df[,2:ncol(Author.df)])
+   
+   if(pk.authorUnique == 0){
+     # does not exist, so add
+    pk.authorUnique <- nrow(Author.df) + 1
+    Author.df[pk.authorUnique,2:ncol(Author.df)] <- authorIndiv[1,]
+    Author.df[pk.authorUnique,1] <- pk.authorUnique
+   }
+  
+  }
+  
+}
+```
+
+
+### Parsing and Preparing all needed data into data frame
+
+```{r}
+
+# Reading the XML file and parse into DOM
+
+# get the root node of the DOM tree
+root <- xmlRoot(xmlDOM)
+
+numArticlesRoots <- xmlSize(root)
+
+# counters for index increase.
+indexJournal <- 1
+indexArticleAuthorMap <- 1
+indexHistory <- 1
+
+for (i in 1:numArticlesRoots)
+{
+  MedlineCitationData <- root[[i]][[1]]
+  PubmedDataData <- root[[i]][[2]]
+  
+  
+  #article id
+  Article.df$articleId[i] <- i
+  
+   #article date
+  articleDateYear <- xpathApply(MedlineCitationData,"./DateCreated/Year", xmlValue)
+  articleDateMonth <- xpathApply(MedlineCitationData,"./DateCreated/Month", xmlValue)
+  articleDateDate <- xpathApply(MedlineCitationData,"./DateCreated/Day", xmlValue)
+  
+  articleDate <- paste0(articleDateYear,"/",articleDateMonth,"/",articleDateDate)
+  
+  articleDate <- as.character.Date(articleDate)
+  Article.df$articleDate[i] <- articleDate
+  
+  #journal publish date
+  JournalDateYear <- xpathApply(PubmedDataData,"./History/PubMedPubDate[@PubStatus = 'pubmed']/Year", xmlValue)
+  JournalDateMonth <- xpathApply(PubmedDataData,"./History/PubMedPubDate[@PubStatus = 'pubmed']/Month", xmlValue)
+  JournalDateDate <- xpathApply(PubmedDataData,"./History/PubMedPubDate[@PubStatus = 'pubmed']/Day", xmlValue)
+  
+  journalDate <- paste0(JournalDateYear,"/",JournalDateMonth,"/",JournalDateDate)
+  
+  journalDate <- as.character.Date(journalDate)
+  
+ 
+  #journal publish date - checks implemented as instructed in the xml documentation
+  if(as.numeric(JournalDateYear) - as.numeric(articleDateYear) > 0 && as.numeric(JournalDateMonth) >= as.numeric(articleDateMonth)) {
+    journalDate <- as.character.Date(journalDate)
+  }
+  else{
+    journalDate <- articleDate
+  }
+  
+   
+  #Article root
+  articleList <- MedlineCitationData[[5]]
+  
+  if (xmlName(articleList) != "Article") {
+    articleList <- MedlineCitationData[[4]]
+  }
+  
+  #article Title
+  articleTitle <- articleList[[2]]
+  
+  Article.df$articleTitle[i] <- xmlValue(articleTitle)
+  
+  #article Lang
+  articleLanguage <- articleList[[7]]
+  
+  if(xmlName(articleLanguage) != "Language"){
+     articleLanguage <- articleList[[8]]
+  }
+  
+  Article.df$articleLanguage[i] <- xmlValue(articleLanguage)
+  
+  #article PubModel
+  articleAttr <- xmlAttrs(articleList)
+  
+  Article.df$articlePubModel[i] <- articleAttr[1]
+  
+  # JOURNAL STEPS STARTS
+  #Journal
+  currentJournal <- articleList[[1]]
+  
+  #article ISSN
+  articleIssn <- currentJournal[[1]]
+  Article.df$issn[i] <- xmlValue(articleIssn)
+  
+  # Journal details START
+  
+  journalIndiv <- parseJournal(currentJournal)
+  
+  
+  pk.journalUnique <- rowPrimaryExists(journalIndiv, Journal.df[,1:ncol(Journal.df)])
+   
+   
+  if(pk.journalUnique == 0){
+     Journal.df[indexJournal,1:ncol(Journal.df)] <- journalIndiv[1,]
+     Journal.df[indexJournal,7] <- journalDate
+     indexJournal = indexJournal+1;
+  }
+   
+  
+
+  # JOURNAL STEPS ENDS
+  
+  # Add mapping table between author and article
+  
+  authorList <- articleList[[7]]
+  
+  if(xmlName(authorList) != "AuthorList"){
+     authorList <- articleList[[6]]
+  }
+  
+  articleAuthorCount <- xmlSize(authorList)
+  
+  
+  for(j in 1:articleAuthorCount){
+    
+    currentRowAuthor <- parseAuthor(authorList[[j]])
+    
+    pk.authorUnique <- rowExists(currentRowAuthor,Author.df[,2:ncol(Author.df)])
+    
+    newArticleAuthorMap.df <- data.frame(indexArticleAuthorMap, i, pk.authorUnique,
+                           stringsAsFactors = F)
+    
+    ArticleAuthorMap.df[indexArticleAuthorMap,1:ncol(ArticleAuthorMap.df)] <- newArticleAuthorMap.df[1,]
+    
+    indexArticleAuthorMap = indexArticleAuthorMap + 1
+    
+  }
+  
+  # PUBLISHING STATUS STARTS for History
+  
+  historyList <- PubmedDataData[[1]]
+  
+  currentHistoryListCount <- xmlSize(historyList)
+  
+  
+  for(x in 1:currentHistoryListCount){
+    
+    pubStatus <- xmlAttrs(historyList[[x]])[[1]]
+    
+     year <- xmlValue(historyList[[x]][[1]])
+     month <- xmlValue(historyList[[x]][[2]])
+     day <- xmlValue(historyList[[x]][[3]])
+     
+     date <- paste0(year,"/",month,"/",day)
+     
+
+     newPubStatus.df <- data.frame(indexHistory, i, pubStatus, date,
+                           stringsAsFactors = F)
+     
+     PubMedHistory.df[indexHistory,1:ncol(PubMedHistory.df)] <- newPubStatus.df[1,]
+     indexHistory = indexHistory+1;
+     
+  
+    
+  }
+  
+  
+  # PUBLISHING STATUS STARTS for History ENDS
+  
+   #journalInfoList root
+  journalInfoList <- MedlineCitationData[[6]]
+  
+  if (xmlName(journalInfoList) != "MedlineJournalInfo") {
+    journalInfoList <- MedlineCitationData[[5]]
+  }
+  
+  
+  # medlineJournalInfo
+  medJournalInfo <- parseMedlineJournalInfo(journalInfoList)
+  
+    MedlineJournalInfo.df[i,3:ncol(MedlineJournalInfo.df)] <- medJournalInfo[1,]
+    MedlineJournalInfo.df[i,1] <- i
+    MedlineJournalInfo.df[i,2] <- i
+ 
+}
+
+
+```
+
+### TABLE CREATION
+
+### Table creation based on the ER diagram
+
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS authorArticleMap
+```
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS PubMedHistory
+```
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS Article
+```
+
+
+#### Journal Table
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS Journal
+```
+
+
+```{sql connection=mydb}
+CREATE TABLE Journal(
+issn VARCHAR(25) NOT NULL,
+issnType VARCHAR(255),
+title VARCHAR(255),
+isoAbbreviation VARCHAR(255),
+journalIssueVolume INT,
+journalIssueNum INT,
+journalPublishDate DATE,
+journalPublishYear INT,
+journalPublishMonth VARCHAR(255),
+PRIMARY KEY (issn)
+)
+```
+
+#### Inserting the Journal data into table
+```{r insertJournalDataIntoTable}
+# dbWriteTable is used with append to insert the data from dataframe into table.
+dbWriteTable(mydb, 'Journal', Journal.df, row.names=F, append=T, overwrite=F)
+```
+#### Display Journal table
+
+```{sql connection=mydb}
+SELECT * FROM Journal
+       LIMIT 5;
+```
+
+#### Author Table
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS Author
+```
+
+
+```{sql connection=mydb}
+CREATE TABLE Author(
+authorId INT NOT NULL,
+authorLastName VARCHAR(50),
+authorForeName VARCHAR(50),
+authorInitial VARCHAR(5),
+authorAffiliation VARCHAR(250),
+PRIMARY KEY (authorId)
+)
+```
+
+#### Inserting the Author data into table
+```{r insertAuthoDataIntoTable}
+# dbWriteTable is used with append to insert the data from dataframe into table.
+dbWriteTable(mydb, 'Author', Author.df, row.names=F, append=T, overwrite=F)
+```
+
+
+#### Display Author table
+
+```{sql connection=mydb}
+SELECT * FROM Author
+       LIMIT 5;
+```
+
+
+#### Article Table
+
+```{sql connection=mydb}
+CREATE TABLE Article(
+articleId INT NOT NULL,
+articleTitle VARCHAR(255),
+articleLanguage VARCHAR(50),
+articleDate DATE,
+articlePubModel VARCHAR(50),
+issn VARCHAR(25) NOT NULL,
+PRIMARY KEY (articleId),
+FOREIGN KEY (issn) REFERENCES Journal(issn)
+)
+```
+
+#### Inserting the Article data into table
+```{r insertArticleDataIntoTable}
+# dbWriteTable is used with append to insert the data from dataframe into table.
+dbWriteTable(mydb, 'Article', Article.df, row.names=F, append=T, overwrite=F)
+```
+
+
+#### Display Article table
+
+```{sql connection=mydb}
+SELECT * FROM Article
+       LIMIT 5;
+```
+
+#### authorArticleMap Table
+
+
+```{sql connection=mydb}
+CREATE TABLE authorArticleMap(
+authorArticleMapId INT NOT NULL,
+articleId INT NOT NULL,
+authorId INT NOT NULL,
+PRIMARY KEY (authorArticleMapId),
+FOREIGN KEY (articleId) REFERENCES Article(articleId),
+FOREIGN KEY (authorId) REFERENCES Author(authorId)
+)
+```
+
+#### Inserting the ArticleAuthorMap data into table
+```{r insertArticleAuthorMapDataIntoTable}
+# dbWriteTable is used with append to insert the data from dataframe into table.
+dbWriteTable(mydb, 'authorArticleMap', ArticleAuthorMap.df, row.names=F, append=T, overwrite=F)
+```
+
+
+#### Display authorArticleMap table
+
+```{sql connection=mydb}
+SELECT * FROM authorArticleMap
+       LIMIT 5;
+```
+
+#### PubMedHistory Table
+
+```{sql connection=mydb}
+CREATE TABLE PubMedHistory(
+historyId INT NOT NULL,
+articleId INT NOT NULL,
+pubMedDateType VARCHAR(255),
+pubMedDate DATE,
+PRIMARY KEY (historyId),
+FOREIGN KEY (articleId) REFERENCES Article(articleId)
+)
+```
+
+#### Inserting the PubMedHistory data into table
+```{r insertPubMedHistoryDataIntoTable}
+# dbWriteTable is used with append to insert the data from dataframe into table.
+dbWriteTable(mydb, 'PubMedHistory', PubMedHistory.df, row.names=F, append=T, overwrite=F)
+```
+
+
+#### Display PubMedHistory table
+
+```{sql connection=mydb}
+SELECT * FROM PubMedHistory
+       LIMIT 5;
+```
+
+#### MedlineJournalInfo Table
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS MedlineJournalInfo
+```
+
+                                     
+```{sql connection=mydb}
+CREATE TABLE MedlineJournalInfo(
+infoId INT NOT NULL,
+articleId INT NOT NULL,
+country VARCHAR(255),
+medlineTA VARCHAR(255),
+nlmUniqueID INT,
+issnLinking VARCHAR(255),
+PRIMARY KEY (infoId)
+)
+```
+
+#### Inserting the MedlineJournalInfo data into table
+```{r insertMedlineJournalInfoDataIntoTable}
+# dbWriteTable is used with append to insert the data from dataframe into table.
+dbWriteTable(mydb, 'MedlineJournalInfo', MedlineJournalInfo.df, row.names=F, append=T, overwrite=F)
+```
+
+
+#### Display MedlineJournalInfo table
+
+```{sql connection=mydb}
+SELECT * FROM MedlineJournalInfo LIMIT 5;
+```
+
+
+### Creating the star/ snowflake - 
+
+
+#### Dropping fact tables
+
+#### ArticleFact DROP
+
+```{sql connection=mydb}
+
+
+DROP TABLE IF EXISTS starschema.ArticleFact;
+
+```
+#### SUMMARY TABLE DROP
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS starschema.SummaryFact;
+```
+
+
+
+### JournalDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.JournalDimension
+
+```
+
+```{r}
+# construct a SQL query
+sqlCmdData1 = "CREATE TABLE starschema.JournalDimension 
+   AS SELECT issn AS JournalDimensionKey,issnType,title,isoAbbreviation, journalIssueVolume, journalIssueNum, journalPublishDate FROM Practicum2DB.Journal"
+
+tempData1 = dbGetQuery(mydb, sqlCmdData1)
+
+sqlCmdaltData1 = "ALTER TABLE starschema.JournalDimension
+   ADD CONSTRAINT JournalDimensionKey PRIMARY KEY (JournalDimensionKey);"
+
+tempaltData1 = dbGetQuery(mydb, sqlCmdaltData1)
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.JournalDimension
+       LIMIT 5;
+```
+
+
+### InformationArticleDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.InformationArticleDimension;
+
+```
+
+```{r}
+# construct a SQL query
+sqlCmdData2 = "CREATE TABLE starschema.InformationArticleDimension 
+   AS SELECT pa.articleId AS InformationArticleDimensionKey,pa.articleTitle,
+   pa.articleLanguage,pa.articleDate, pa.articlePubModel, 
+   pinfo.country,pinfo.medlineTA,pinfo.nlmUniqueID,pinfo.issnLinking
+   FROM Practicum2DB.Article pa
+   JOIN Practicum2DB.MedlineJournalInfo pinfo USING (articleId)"
+
+tempData2 = dbGetQuery(mydb, sqlCmdData2)
+
+sqlCmdaltData2 = "ALTER TABLE starschema.InformationArticleDimension
+   ADD CONSTRAINT InformationArticleDimensionKey PRIMARY KEY (InformationArticleDimensionKey);"
+
+tempaltData2 = dbGetQuery(mydb, sqlCmdaltData2)
+
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.InformationArticleDimension
+       LIMIT 5;
+```
+
+
+### AuthorDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.AuthorDimension;
+
+```
+
+```{r}
+# construct a SQL query
+sqlCmdData3 = "CREATE TABLE starschema.AuthorDimension 
+   AS SELECT authorId AS authorDimensionKey,authorLastName,authorForeName,authorInitial FROM Practicum2DB.Author"
+
+tempData3 = dbGetQuery(mydb, sqlCmdData3)
+
+sqlCmdaltData3 = "ALTER TABLE starschema.AuthorDimension
+   ADD CONSTRAINT authorDimensionKey PRIMARY KEY (authorDimensionKey);"
+
+tempaltData3 = dbGetQuery(mydb, sqlCmdaltData3)
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.AuthorDimension
+       LIMIT 5;
+```
+
+
+### AuthorMapDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.AuthorMapDimension;
+
+```
+
+```{r}
+# construct a SQL query
+sqlCmdData4 = "CREATE TABLE starschema.AuthorMapDimension 
+   AS SELECT authorArticleMapId AS mapAuthorDimensionKey,articleId AS InformationArticleDimensionKey,authorId AS authorDimensionKey FROM Practicum2DB.authorArticleMap"
+
+tempData4 = dbGetQuery(mydb, sqlCmdData4)
+
+sqlCmdaltData4 = "ALTER TABLE starschema.AuthorMapDimension
+   ADD CONSTRAINT mapAuthorDimensionKey PRIMARY KEY (mapAuthorDimensionKey);"
+
+tempaltData4 = dbGetQuery(mydb, sqlCmdaltData4)
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.AuthorMapDimension
+       LIMIT 5;
+```
+
+
+### HistoryDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.HistoryDimension;
+
+```
+
+
+```{r}
+# construct a SQL query
+sqlCmdData6 = "CREATE TABLE starschema.HistoryDimension 
+   AS SELECT historyId AS historyDimKey,pubMedDateType,pubMedDate FROM Practicum2DB.PubMedHistory"
+
+tempData6 = dbGetQuery(mydb, sqlCmdData6)
+
+
+sqlCmdaltData6 = "ALTER TABLE starschema.HistoryDimension
+   ADD CONSTRAINT historyDimKey PRIMARY KEY (historyDimKey);"
+
+tempaltData6 = dbGetQuery(mydb, sqlCmdaltData6)
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.HistoryDimension
+       LIMIT 5;
+```
+
+
+### PublishDateDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.PublishDateDimension;
+
+```
+
+
+```{r}
+# construct a SQL query for create
+sqlCmdData7 = "CREATE TABLE starschema.PublishDateDimension (
+  pubDatedim_key int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  journalPublishDate DATE,
+  day_of_week INT,
+year_num INT,
+quarter_of_year INT
+)"
+
+tempData7 = dbGetQuery(mydb, sqlCmdData7)
+
+# construct a SQL query for insert
+sqlCmdData8 = "INSERT INTO starschema.PublishDateDimension (journalPublishDate,day_of_week,year_num,quarter_of_year)
+SELECT DISTINCT journalPublishDate,dayofweek(journalPublishDate) AS day_of_week,year(journalPublishDate) AS year, quarter(journalPublishDate) AS quarter
+FROM Practicum2DB.Journal"
+
+tempData8 = dbGetQuery(mydb, sqlCmdData8)
+
+
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.PublishDateDimension
+       LIMIT 5;
+```
+
+### ArticleDateDimension
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.ArticleDateDimension;
+
+```
+
+
+```{r}
+# construct a SQL query for create
+sqlCmdData9 = "CREATE TABLE starschema.ArticleDateDimension (
+  articleDatedim_key int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  articleDate DATE,
+  day_of_week INT,
+year_num INT,
+quarter_of_year INT
+);"
+
+tempData9 = dbGetQuery(mydb, sqlCmdData9)
+
+# construct a SQL query for insert
+sqlCmdData10 = "INSERT INTO starschema.ArticleDateDimension (articleDate,day_of_week,year_num,quarter_of_year)
+SELECT DISTINCT articleDate,dayofweek(articleDate) AS day_of_week,year(articleDate) AS year,quarter(articleDate) AS quarter
+FROM Practicum2DB.Article"
+
+tempData10 = dbGetQuery(mydb, sqlCmdData10)
+
+
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.ArticleDateDimension
+       LIMIT 5;
+```
+
+### Fact Tables
+
+#### ArticleFact
+
+```{sql connection=mydb}
+
+DROP TABLE IF EXISTS starschema.ArticleFact;
+
+```
+
+
+```{r}
+# construct a SQL query for create
+sqlCmdDataf1 = "CREATE TABLE starschema.ArticleFact (
+InformationArticleDimensionKey INT,
+JournalDimensionKey VARCHAR(20),
+pubDatedim_key INT,
+articleDatedim_key INT,
+mapAuthorDimensionKey INT,
+historyDimKey INT,
+CONSTRAINT PRIMARY KEY (InformationArticleDimensionKey,JournalDimensionKey,pubDatedim_key,articleDatedim_key,mapAuthorDimensionKey,historyDimKey),
+FOREIGN KEY (InformationArticleDimensionKey) REFERENCES starschema.InformationArticleDimension(InformationArticleDimensionKey),
+FOREIGN KEY (JournalDimensionKey) REFERENCES starschema.JournalDimension(JournalDimensionKey),
+FOREIGN KEY (pubDatedim_key) REFERENCES starschema.PublishDateDimension(pubDatedim_key),
+FOREIGN KEY (articleDatedim_key) REFERENCES starschema.ArticleDateDimension(articleDatedim_key),
+FOREIGN KEY (mapAuthorDimensionKey) REFERENCES starschema.AuthorMapDimension(mapAuthorDimensionKey),
+FOREIGN KEY (historyDimKey) REFERENCES starschema.HistoryDimension(historyDimKey)
+)"
+
+tempDataf1 = dbGetQuery(mydb, sqlCmdDataf1)
+
+# construct a SQL query for insert
+sqlCmdDatf2 = "INSERT INTO starschema.ArticleFact 
+SELECT a.articleId,a.issn,dtdPub.pubDatedim_key, dtdArt.articleDatedim_key, dtdMap.mapAuthorDimensionKey, dtdHis.historyId
+   FROM Practicum2DB.Article a
+   JOIN Practicum2DB.Journal jd ON jd.issn = a.issn
+   JOIN starschema.PublishDateDimension dtdPub ON dtdPub.journalPublishDate = jd.journalPublishDate
+   JOIN starschema.ArticleDateDimension dtdArt ON dtdArt.articleDate = a.articleDate
+   JOIN starschema.AuthorMapDimension dtdMap ON dtdMap.InformationArticleDimensionKey = a.articleId
+   JOIN Practicum2DB.PubMedHistory dtdHis ON dtdHis.articleId = a.articleId"
+
+tempDataf2 = dbGetQuery(mydb, sqlCmdDatf2)
+
+
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.ArticleFact
+       LIMIT 5;
+```
+
+### SUMMARY TABLE
+
+
+
+### QUARTER DIMENSION
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS starschema.QuarterDimension;
+```
+
+
+```{r}
+# construct a SQL query for create
+sqlCmdDataquatcreate = "CREATE TABLE starschema.QuarterDimension (
+  quarterYear_key int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  quarter_of_year INT,
+  year_num INT
+)"
+
+tempDataquatcreate = dbGetQuery(mydb, sqlCmdDataquatcreate)
+
+# construct a SQL query for insert
+sqlCmdDataquartIns = "INSERT INTO starschema.QuarterDimension (quarter_of_year,year_num)
+SELECT DISTINCT quarter(journalPublishDate) AS quarter,year(journalPublishDate) AS year from Practicum2DB.Journal"
+
+tempDataquartIns = dbGetQuery(mydb, sqlCmdDataquartIns)
+
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.QuarterDimension
+       LIMIT 5;
+```
+
+###  SUMMARY TABLE
+
+
+```{sql connection=mydb}
+DROP TABLE IF EXISTS starschema.SummaryFact;
+```
+
+
+```{r}
+# construct a SQL query for create
+sqlCmdDataSUMMARYCr = "CREATE TABLE starschema.SummaryFact (
+summary_key int NOT NULL AUTO_INCREMENT PRIMARY KEY,
+totalArticleCount INT,
+quarterYear_key INT,
+authorDimensionKey INT,
+JournalDimensionKey VARCHAR(20),
+FOREIGN KEY (JournalDimensionKey) REFERENCES starschema.JournalDimension(JournalDimensionKey),
+FOREIGN KEY (quarterYear_key) REFERENCES starschema.QuarterDimension(quarterYear_key),
+FOREIGN KEY (authorDimensionKey) REFERENCES starschema.AuthorDimension(authorDimensionKey)
+)"
+
+tempDataSummarycreate = dbGetQuery(mydb, sqlCmdDataSUMMARYCr)
+
+# construct a SQL query for insert
+sqlCmdDataSummaryIns = "INSERT INTO starschema.SummaryFact (totalArticleCount, quarterYear_key, authorDimensionKey, JournalDimensionKey)
+SELECT count(*),dtdQtr.quarterYear_key,dtdMap.authorDimensionKey,a.issn
+   FROM Practicum2DB.Article a
+   JOIN starschema.JournalDimension jd ON jd.JournalDimensionKey = a.issn
+   JOIN starschema.PublishDateDimension dtdPub ON dtdPub.journalPublishDate = jd.journalPublishDate
+   JOIN starschema.AuthorMapDimension dtdMap ON dtdMap.InformationArticleDimensionKey = a.articleId
+   JOIN starschema.QuarterDimension dtdQtr ON dtdQtr.quarter_of_year = dtdPub.quarter_of_year AND dtdQtr.year_num = dtdPub.year_num
+   group by dtdMap.authorDimensionKey,dtdPub.quarter_of_year,a.issn"
+
+tempDataSummaryIns = dbGetQuery(mydb, sqlCmdDataSummaryIns)
+
+
+```
+
+```{sql connection=mydb}
+SELECT * FROM starschema.SummaryFact
+       LIMIT 5;
+```
+
+## Seasonal graph for the created fact tables
+
+```{r}
+library(ggplot2)
+```
+
+
+### Number of journals published per quarter.
+
+```{r}
+## Number of journals published per quarter.
+
+#### From the Summary fact table, we use a join with starschema.QuarterDimension to get the quarter of year. This quarter is used to get the distinct journal published per quarter.
+
+tempRsJournalPerQuarter <- dbGetQuery(mydb, statement= paste("select quarter_of_year, count(distinct JournalDimensionKey) as `TotalJournalCount` from starschema.SummaryFact
+JOIN  starschema.QuarterDimension using(quarterYear_key)
+group by quarter_of_year order by quarter_of_year"))
+
+tempRsJournalPerQuarter
+
+```
+
+
+```{r}
+ggplot(tempRsJournalPerQuarter, aes(x=quarter_of_year, y=TotalJournalCount)) +
+  geom_line(color="#69b3a2", size=1) +
+  ggtitle("Number of journals published per quarter") +
+geom_text(aes(label=TotalJournalCount), vjust=-.5)
+```
+
+### Number of authors who featured in a published journal per quarter.
+
+```{r warning=FALSE}
+## Number of authors who featured in a published journal per quarter.
+
+#### From the Summary fact table, we use a join with starschema.QuarterDimension to get the quarter of year. This quarter is used to get the authors who featured in the journal published per quarter.
+
+
+tempRsAuthorsPerQuarter <- dbGetQuery(mydb, statement= paste("select quarter_of_year, SUM(Authcnt) as `TotalAuthor` from(
+select  quarter_of_year, count(authorDimensionKey) as Authcnt  from starschema.SummaryFact
+JOIN  starschema.QuarterDimension using(quarterYear_key)
+group by quarter_of_year,totalArticleCount) as newTable group by quarter_of_year"))
+
+tempRsAuthorsPerQuarter
+
+```
+
+
+
+```{r}
+ggplot(tempRsAuthorsPerQuarter, aes(x=quarter_of_year, y=TotalAuthor)) +
+  geom_line(color="#69b3a2", size=1) +
+  ggtitle("Number of authors who featured in a published journal per quarter") +
+geom_text(aes(label=TotalAuthor), vjust=-.5)
+```
+
+### Number of articles published  per quarter
+
+```{r}
+
+## Number of articles published  per quarter
+
+tempRsArticlesPerQuarter <- dbGetQuery(mydb, statement= paste("select quarter_of_year, count(distinct InformationArticleDimensionKey) as `Total Articles`
+from starschema.ArticleFact
+JOIN  starschema.PublishDateDimension using(pubDatedim_key) 
+group by quarter_of_year"))
+
+tempRsArticlesPerQuarter
+
+```
+
+```{r}
+ggplot(tempRsArticlesPerQuarter, aes(x=quarter_of_year, y=`Total Articles`)) +
+  geom_line(color="#69b3a2", size=1) +
+  ggtitle("Number of articles published per quarter") +
+geom_text(aes(label=`Total Articles`), vjust=-.5)
+```
+
+
+### Disconnecting the DB
+
+
+```{r}
+dbDisconnect(mydb)
+```
